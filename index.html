@@ -1380,6 +1380,197 @@ const VIZ = [
       ctx.restore();
     }
   },
+
+  // 21 ── JEDI LIGHTSABER ──
+  {
+    cat: 'myth', icon: '\u2694\ufe0f', name: 'Jedi Lightsaber',
+    desc: 'Джедайский меч пишет привет',
+    viz: (ctx, w, h, t) => {
+      const text = 'привет пацанчики';
+      const fontSize = Math.min(w / text.length, 72);
+      ctx.font = `bold ${fontSize}px Inter, sans-serif`;
+
+      // Measure full text width to center it
+      const totalW = ctx.measureText(text).width;
+      const startX = (w - totalW) / 2;
+      const baseY = h / 2;
+
+      // ── Blurred stars background ──
+      if (!ctx._jediStars) {
+        ctx._jediStars = [];
+        for (let i = 0; i < 200; i++) {
+          ctx._jediStars.push({
+            x: Math.random() * 2000,
+            y: Math.random() * 2000,
+            r: 0.5 + Math.random() * 2.5,
+            brightness: 0.2 + Math.random() * 0.6,
+            twinkleSpeed: 1 + Math.random() * 3,
+            blur: 1 + Math.random() * 4,
+          });
+        }
+      }
+
+      // Draw blurred stars
+      for (const s of ctx._jediStars) {
+        const sx = s.x % w, sy = s.y % h;
+        const flicker = 0.5 + Math.sin(t * s.twinkleSpeed + s.x) * 0.5;
+        const alpha = s.brightness * flicker;
+
+        // Outer glow (blur)
+        const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, s.r * s.blur);
+        grad.addColorStop(0, `rgba(200,210,255,${alpha * 0.6})`);
+        grad.addColorStop(0.3, `rgba(180,190,255,${alpha * 0.2})`);
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(sx, sy, s.r * s.blur, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Core bright dot
+        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, s.r * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // ── Get character positions ──
+      const chars = [];
+      let cursorX = startX;
+      for (const ch of text) {
+        const charW = ctx.measureText(ch).width;
+        chars.push({ ch, x: cursorX, w: charW, cx: cursorX + charW / 2 });
+        cursorX += charW;
+      }
+
+      // ── Lightsaber writing progress ──
+      const writeSpeed = 0.4; // chars per second
+      const charsVisible = Math.floor(t * writeSpeed);
+      const partialProgress = (t * writeSpeed) % 1;
+
+      // ── Lightsaber hilt position ──
+      let hiltX, hiltY, bladeAngle;
+      if (charsVisible < chars.length) {
+        const cur = chars[Math.min(charsVisible, chars.length - 1)];
+        const nextX = charsVisible < chars.length - 1
+          ? chars[charsVisible + 1].cx : cur.cx;
+        const progressX = cur.cx + (nextX - cur.cx) * partialProgress;
+
+        hiltX = progressX;
+        hiltY = baseY + fontSize * 0.55;
+        bladeAngle = -Math.PI / 2; // pointing up
+      } else {
+        // All chars done — saber rests at center
+        hiltX = w / 2;
+        hiltY = baseY + fontSize * 0.55;
+        bladeAngle = -Math.PI / 2 + Math.sin(t * 0.8) * 0.15;
+      }
+
+      // ── Draw revealed characters with glow ──
+      for (let i = 0; i <= Math.min(charsVisible, chars.length - 1); i++) {
+        const c = chars[i];
+        const charAlpha = i < charsVisible
+          ? 1
+          : partialProgress;
+
+        // Green glow behind text
+        ctx.save();
+        ctx.shadowColor = '#00ff41';
+        ctx.shadowBlur = 30;
+        ctx.fillStyle = `rgba(0,255,65,${charAlpha * 0.9})`;
+        ctx.fillText(c.ch, c.x, baseY);
+        ctx.restore();
+
+        // Bright core
+        ctx.fillStyle = `rgba(200,255,220,${charAlpha * 0.7})`;
+        ctx.fillText(c.ch, c.x, baseY);
+      }
+
+      // ── Draw lightsaber ──
+      const bladeLen = fontSize * 0.9;
+
+      // Blade tip (with slight wobble)
+      const wobble = Math.sin(t * 8) * 2;
+      const tipX = hiltX + Math.cos(bladeAngle) * bladeLen + wobble * Math.cos(bladeAngle + Math.PI/2);
+      const tipY = hiltY + Math.sin(bladeAngle) * bladeLen + wobble * Math.sin(bladeAngle + Math.PI/2);
+
+      // Outer glow of blade
+      ctx.save();
+      ctx.shadowColor = '#00ff41';
+      ctx.shadowBlur = 50;
+      ctx.strokeStyle = 'rgba(0,255,65,0.3)';
+      ctx.lineWidth = 18;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(hiltX, hiltY);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+      ctx.restore();
+
+      // Mid glow
+      ctx.strokeStyle = 'rgba(0,255,65,0.6)';
+      ctx.lineWidth = 10;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(hiltX, hiltY);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+
+      // Core blade
+      ctx.strokeStyle = 'rgba(180,255,200,0.95)';
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(hiltX, hiltY);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+
+      // White hot center
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(hiltX, hiltY);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+
+      // ── Hilt ──
+      const hiltW = 10, hiltH = 30;
+      const hx = hiltX - hiltW / 2;
+      const hy = hiltY;
+
+      // Hilt body
+      ctx.fillStyle = '#555';
+      ctx.fillRect(hx, hy, hiltW, hiltH);
+
+      // Hilt details
+      ctx.fillStyle = '#333';
+      ctx.fillRect(hx + 1, hy + 4, hiltW - 2, 3);
+      ctx.fillRect(hx + 1, hy + 12, hiltW - 2, 3);
+      ctx.fillStyle = '#888';
+      ctx.fillRect(hx + 2, hy + 8, hiltW - 4, 2);
+      ctx.fillStyle = '#c33';
+      ctx.beginPath();
+      ctx.arc(hiltX, hy + 20, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // ── Sparks at tip ──
+      if (charsVisible < chars.length) {
+        for (let i = 0; i < 5; i++) {
+          const sparkX = tipX + (Math.random() - 0.5) * 20;
+          const sparkY = tipY + (Math.random() - 0.5) * 20;
+          const sparkAlpha = 0.3 + Math.random() * 0.5;
+          ctx.fillStyle = `rgba(0,255,65,${sparkAlpha})`;
+          ctx.beginPath();
+          ctx.arc(sparkX, sparkY, 1 + Math.random() * 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // ── Subtle label ──
+      ctx.fillStyle = 'rgba(0,255,65,0.3)';
+      ctx.font = '11px JetBrains Mono, monospace';
+      ctx.fillText('May the Force be with you', 20, 30);
+    }
+  },
 ];
 
 /* ═══════════════════════════════════════════════════
