@@ -1734,7 +1734,7 @@ renderFilters();
 renderExamples();
 
 /* ═══════════════════════════════════════════════════
-   MULTI-USER SYNC VIA WEBSOCKET
+   MULTI-USER SYNC
    ═══════════════════════════════════════════════════ */
 
 const userId = 'u' + Math.random().toString(36).slice(2, 8);
@@ -1742,59 +1742,83 @@ let ws = null;
 let reconnectTimer = null;
 const connStatus = document.getElementById('connStatus');
 const connText = document.getElementById('connText');
-const userCountEl = document.getElementById('userCount');
 
 // Viz name → function lookup for receiving remote layers
 const vizByName = {};
 VIZ.forEach(v => { vizByName[v.name.toLowerCase()] = v.viz; });
 
-function connectWS() {
-  // Auto-detect server URL
+function receiveLayer(layerData) {
+  if (vizLayers.some(l => l._serverId === layerData.id)) return;
+  if (layerData.addedBy === userId) return;
+
+  let vizFn = null;
+  if (layerData.vizName && vizByName[layerData.vizName.toLowerCase()]) {
+    vizFn = vizByName[layerData.vizName.toLowerCase()];
+  }
+  if (!vizFn && layerData.vizCode) {
+    try { vizFn = new Function('ctx', 'w', 'h', 't', 'now', layerData.vizCode); }
+    catch (e) { return; }
+  }
+  if (!vizFn) return;
+
+  if (vizLayers.length >= MAX_LAYERS) vizLayers.shift();
+  const off = createOffscreen();
+  vizLayers.push({
+    name: layerData.vizName || 'Remote',
+    viz: vizFn,
+    startTime: performance.now(),
+    opacity: 0, active: true,
+    offscreen: off, remote: true,
+    addedBy: layerData.addedBy || '?',
+    _serverId: layerData.id,
+  });
+  activeLayerIdx = vizLayers.length - 1;
+  renderLayerStack();
+}
+
+/* ── BroadcastChannel: syncs across tabs on same device (instant, no server) ── */
+const bc = new BroadcastChannel('viz-layers');
+bc.onmessage = (e) => {
+  const msg = e.data;
+  if (msg.type === 'new-layer') receiveLayer(msg.layer);
+  if (msg.type === 'clear-all') {
+    vizLayers.length = 0;
+    activeLayerIdx = -1;
+    renderLayerStack();
+  }
+};
+
+function broadcastLayer(layerData) {
+  bc.postMessage({ type: 'new-layer', layer: layerData });
+}
+
+/* ── WebSocket: syncs across devices when server is running ── */
+function getServerUrl() {
+  const saved = localStorage.getItem('viz_server_url');
+  if (saved) return saved;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  let serverUrl;
+  return `${proto}://${location.hostname}:3000`;
+}
 
-  if (location.hostname === 'davidshonia1986-bot.github.io') {
-    // GitHub Pages — connect to external server
-    // User should set this to their deployed server URL
-    serverUrl = localStorage.getItem('viz_server_url') || '';
-  } else {
-    // Local dev — connect to localhost:3000
-    serverUrl = `${proto}://${location.hostname}:3000`;
-  }
-
-  if (!serverUrl) {
-    connText.textContent = 'Offline mode';
-    return;
-  }
-
+function connectWS() {
+  const serverUrl = getServerUrl();
   try {
     ws = new WebSocket(serverUrl);
   } catch (e) {
-    connText.textContent = 'Offline mode';
+    connText.textContent = 'Local mode';
     return;
   }
 
   ws.onopen = () => {
     connStatus.classList.add('connected');
-    connText.textContent = 'Connected';
-    clearTimeout(reconnectTimer);
+    connText.textContent = 'Synced';
   };
 
   ws.onmessage = (evt) => {
     try {
       const msg = JSON.parse(evt.data);
-
-      if (msg.type === 'init') {
-        // Load history from server
-        for (const layerData of msg.layers) {
-          receiveLayer(layerData);
-        }
-      }
-
-      if (msg.type === 'new-layer') {
-        receiveLayer(msg.layer);
-      }
-
+      if (msg.type === 'init') msg.layers.forEach(l => receiveLayer(l));
+      if (msg.type === 'new-layer') receiveLayer(msg.layer);
       if (msg.type === 'clear-all') {
         vizLayers.length = 0;
         activeLayerIdx = -1;
@@ -1805,55 +1829,35 @@ function connectWS() {
 
   ws.onclose = () => {
     connStatus.classList.remove('connected');
-    connText.textContent = 'Reconnecting...';
-    reconnectTimer = setTimeout(connectWS, 3000);
+    connText.textContent = 'Local mode';
+    reconnectTimer = setTimeout(connectWS, 5000);
   };
 
   ws.onerror = () => {
-    connText.textContent = 'Offline mode';
+    connStatus.classList.remove('connected');
+    connText.textContent = 'Local mode';
   };
 }
 
-function receiveLayer(layerData) {
-  // Don't add duplicates
-  if (vizLayers.some(l => l._serverId === layerData.id)) return;
+// Override addVizLayer to broadcast
+const _origAddVizLayer = addVizLayer;
+addVizLayer = function(vizFn, name, opts = {}) {
+  _origAddVizLayer(vizFn, name, opts);
 
-  let vizFn = null;
-
-  // Try to find viz by name
-  if (layerData.vizName && vizByName[layerData.vizName.toLowerCase()]) {
-    vizFn = vizByName[layerData.vizName.toLowerCase()];
+  if (!opts.remote) {
+    const layerData = {
+      id: Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      vizName: name,
+      vizCode: opts.vizCode || null,
+      addedBy: userId,
+    };
+    broadcastLayer(layerData);
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'add-layer', ...layerData }));
+    }
   }
+};
 
-  // Try to eval custom code
-  if (!vizFn && layerData.vizCode) {
-    try {
-      vizFn = new Function('ctx', 'w', 'h', 't', 'now', layerData.vizCode);
-    } catch (e) { return; }
-  }
-
-  if (!vizFn) return;
-
-  // Add as remote layer (don't re-broadcast)
-  if (vizLayers.length >= MAX_LAYERS) vizLayers.shift();
-  const off = createOffscreen();
-  const layer = {
-    name: layerData.vizName || 'Remote',
-    viz: vizFn,
-    startTime: performance.now(),
-    opacity: 0,
-    active: true,
-    offscreen: off,
-    remote: true,
-    addedBy: layerData.addedBy || '?',
-    _serverId: layerData.id,
-  };
-  vizLayers.push(layer);
-  activeLayerIdx = vizLayers.length - 1;
-  renderLayerStack();
-}
-
-// Start connection
 connectWS();
 </script>
 </body>
