@@ -84,10 +84,11 @@
     z-index: 200;
     display: flex;
     align-items: stretch;
-    background: rgba(6,6,12,0.9);
-    border-top: 1px solid var(--glass-border);
+    background: rgba(10,10,22,0.95);
+    border-top: 1px solid rgba(124,111,247,0.35);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 -4px 30px rgba(124,111,247,0.1), 0 -1px 0 rgba(255,255,255,0.06);
     transition: transform var(--speed) var(--ease);
   }
 
@@ -99,12 +100,21 @@
     flex: 1;
     height: 64px;
     padding: 0 20px;
-    background: transparent;
-    border: none; outline: none;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    margin: 8px 0 8px 8px;
+    outline: none;
     font-family: 'JetBrains Mono', monospace;
     font-size: 14px;
     color: var(--text);
     caret-color: var(--accent);
+    transition: border-color 200ms, box-shadow 200ms;
+  }
+
+  .input-bar input:focus {
+    border-color: rgba(124,111,247,0.4);
+    box-shadow: 0 0 20px rgba(124,111,247,0.08);
   }
 
   .input-bar input::placeholder { color: var(--text-dim); }
@@ -302,11 +312,53 @@
   .cat-game .icon { background: rgba(52,211,153,0.15); }
   .cat-myth .icon { background: rgba(244,114,182,0.15); }
   .cat-horror .icon { background: rgba(156,163,175,0.15); }
+
+  /* ── Connection status ── */
+  .conn-status {
+    position: fixed;
+    top: 12px; right: 12px;
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    backdrop-filter: blur(12px);
+    font-size: 10px;
+    color: var(--text-dim);
+    transition: all 300ms;
+  }
+
+  .conn-status .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #ef4444;
+    transition: background 300ms;
+  }
+
+  .conn-status.connected .dot {
+    background: #4ade80;
+    box-shadow: 0 0 6px rgba(74,222,128,0.5);
+  }
+
+  .conn-status .users {
+    margin-left: 4px;
+    color: var(--accent);
+    font-weight: 500;
+  }
 </style>
 </head>
 <body>
 
 <canvas id="vizCanvas"></canvas>
+
+<div class="conn-status" id="connStatus">
+  <span class="dot"></span>
+  <span id="connText">Connecting...</span>
+  <span class="users" id="userCount"></span>
+</div>
 
 <div class="layer-stack" id="layerStack"></div>
 
@@ -359,7 +411,7 @@ function createOffscreen() {
   return c;
 }
 
-function addVizLayer(vizFn, name) {
+function addVizLayer(vizFn, name, opts = {}) {
   if (vizLayers.length >= MAX_LAYERS) {
     vizLayers.shift();
   }
@@ -371,10 +423,22 @@ function addVizLayer(vizFn, name) {
     opacity: 0,
     active: true,
     offscreen: off,
+    remote: opts.remote || false,
+    addedBy: opts.addedBy || '',
   };
   vizLayers.push(layer);
   activeLayerIdx = vizLayers.length - 1;
   renderLayerStack();
+
+  // Broadcast to other users (only local actions)
+  if (!opts.remote && ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({
+      type: 'add-layer',
+      vizName: name,
+      vizCode: opts.vizCode || null,
+      addedBy: userId,
+    }));
+  }
 }
 
 function removeLayer(idx) {
@@ -385,11 +449,12 @@ function removeLayer(idx) {
 
 function renderLayerStack() {
   const stack = document.getElementById('layerStack');
-  stack.innerHTML = vizLayers.map((l, i) =>
-    `<div class="layer-pill ${i === activeLayerIdx ? 'active' : ''}" data-idx="${i}">
-      <span class="dot"></span>${l.name}
-    </div>`
-  ).join('');
+  stack.innerHTML = vizLayers.map((l, i) => {
+    const who = l.addedBy ? ` [${l.addedBy.slice(0,6)}]` : '';
+    return `<div class="layer-pill ${i === activeLayerIdx ? 'active' : ''}" data-idx="${i}">
+      <span class="dot"></span>${l.name}${who}
+    </div>`;
+  }).join('');
 
   stack.querySelectorAll('.layer-pill').forEach(el => {
     el.addEventListener('click', () => {
@@ -1620,7 +1685,7 @@ function renderExamples() {
     card.addEventListener('click', () => {
       const idx = parseInt(card.dataset.idx);
       const v = VIZ[idx];
-      addVizLayer(v.viz, v.name);
+      addVizLayer(v.viz, v.name, { vizCode: v.viz.toString() });
     });
   });
 }
@@ -1643,7 +1708,7 @@ function runInput() {
   // Check if it matches a viz name
   const match = VIZ.find(v => v.name.toLowerCase() === val.toLowerCase());
   if (match) {
-    addVizLayer(match.viz, match.name);
+    addVizLayer(match.viz, match.name, { vizCode: match.viz.toString() });
     inputEl.value = '';
     return;
   }
@@ -1651,7 +1716,7 @@ function runInput() {
   // Try to run as custom JS canvas code
   try {
     const userViz = new Function('ctx', 'w', 'h', 't', 'now', val);
-    addVizLayer(userViz, 'Custom: ' + val.slice(0, 30));
+    addVizLayer(userViz, 'Custom: ' + val.slice(0, 30), { vizCode: val });
     inputEl.value = '';
   } catch (e) {
     inputEl.style.boxShadow = '0 0 0 1px rgba(239,68,68,0.5)';
@@ -1667,6 +1732,129 @@ inputEl.addEventListener('keydown', e => {
 // Init
 renderFilters();
 renderExamples();
+
+/* ═══════════════════════════════════════════════════
+   MULTI-USER SYNC VIA WEBSOCKET
+   ═══════════════════════════════════════════════════ */
+
+const userId = 'u' + Math.random().toString(36).slice(2, 8);
+let ws = null;
+let reconnectTimer = null;
+const connStatus = document.getElementById('connStatus');
+const connText = document.getElementById('connText');
+const userCountEl = document.getElementById('userCount');
+
+// Viz name → function lookup for receiving remote layers
+const vizByName = {};
+VIZ.forEach(v => { vizByName[v.name.toLowerCase()] = v.viz; });
+
+function connectWS() {
+  // Auto-detect server URL
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  let serverUrl;
+
+  if (location.hostname === 'davidshonia1986-bot.github.io') {
+    // GitHub Pages — connect to external server
+    // User should set this to their deployed server URL
+    serverUrl = localStorage.getItem('viz_server_url') || '';
+  } else {
+    // Local dev — connect to localhost:3000
+    serverUrl = `${proto}://${location.hostname}:3000`;
+  }
+
+  if (!serverUrl) {
+    connText.textContent = 'Offline mode';
+    return;
+  }
+
+  try {
+    ws = new WebSocket(serverUrl);
+  } catch (e) {
+    connText.textContent = 'Offline mode';
+    return;
+  }
+
+  ws.onopen = () => {
+    connStatus.classList.add('connected');
+    connText.textContent = 'Connected';
+    clearTimeout(reconnectTimer);
+  };
+
+  ws.onmessage = (evt) => {
+    try {
+      const msg = JSON.parse(evt.data);
+
+      if (msg.type === 'init') {
+        // Load history from server
+        for (const layerData of msg.layers) {
+          receiveLayer(layerData);
+        }
+      }
+
+      if (msg.type === 'new-layer') {
+        receiveLayer(msg.layer);
+      }
+
+      if (msg.type === 'clear-all') {
+        vizLayers.length = 0;
+        activeLayerIdx = -1;
+        renderLayerStack();
+      }
+    } catch (e) {}
+  };
+
+  ws.onclose = () => {
+    connStatus.classList.remove('connected');
+    connText.textContent = 'Reconnecting...';
+    reconnectTimer = setTimeout(connectWS, 3000);
+  };
+
+  ws.onerror = () => {
+    connText.textContent = 'Offline mode';
+  };
+}
+
+function receiveLayer(layerData) {
+  // Don't add duplicates
+  if (vizLayers.some(l => l._serverId === layerData.id)) return;
+
+  let vizFn = null;
+
+  // Try to find viz by name
+  if (layerData.vizName && vizByName[layerData.vizName.toLowerCase()]) {
+    vizFn = vizByName[layerData.vizName.toLowerCase()];
+  }
+
+  // Try to eval custom code
+  if (!vizFn && layerData.vizCode) {
+    try {
+      vizFn = new Function('ctx', 'w', 'h', 't', 'now', layerData.vizCode);
+    } catch (e) { return; }
+  }
+
+  if (!vizFn) return;
+
+  // Add as remote layer (don't re-broadcast)
+  if (vizLayers.length >= MAX_LAYERS) vizLayers.shift();
+  const off = createOffscreen();
+  const layer = {
+    name: layerData.vizName || 'Remote',
+    viz: vizFn,
+    startTime: performance.now(),
+    opacity: 0,
+    active: true,
+    offscreen: off,
+    remote: true,
+    addedBy: layerData.addedBy || '?',
+    _serverId: layerData.id,
+  };
+  vizLayers.push(layer);
+  activeLayerIdx = vizLayers.length - 1;
+  renderLayerStack();
+}
+
+// Start connection
+connectWS();
 </script>
 </body>
 </html>
